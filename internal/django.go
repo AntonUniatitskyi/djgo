@@ -100,7 +100,7 @@ func CreateProject(projectName string, apps []string, useDocker bool, useDuplica
 	venvPip := getVenvExec(projectName, "pip")
 
 	showStep("📦", "Устанавливаем Django (и psycopg2-binary для БД) внутрь env", 800)
-	if err := runCommandQuiet("", venvPip, "install", "--no-cache-dir", "django", "psycopg2-binary"); err != nil {
+	if err := runCommandQuiet("", venvPip, "install", "--no-cache-dir", "django", "psycopg2-binary", "python-decouple"); err != nil {
 		log.Fatalf("\n❌ Ошибка установки пакетов через pip: %v", err)
 	}
 
@@ -126,6 +126,13 @@ func CreateProject(projectName string, apps []string, useDocker bool, useDuplica
 		}
 		settingsPath = filepath.Join(projectName, "core", "settings.py")
 		urlsPath = filepath.Join(projectName, "core", "urls.py")
+	}
+	showStep("🔐", "Генерируем криптостойкий SECRET_KEY и настраиваем .env", 300)
+	if err := createEnvFiles(projectName); err != nil {
+		log.Fatalf("\n❌ Ошибка генерации .env файлов: %v", err)
+	}
+	if err := patchSettingsForEnv(settingsPath); err != nil {
+		log.Fatalf("\n❌ Ошибка настройки python-decouple в settings.py: %v", err)
 	}
 	showStep("🐳", "Разворачиваем .gitignore, .dockerignore и Dockerfile", 300)
 	GenerateInfrastructure(projectName, projectName, useDocker)
