@@ -1,0 +1,17 @@
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+djgo
+
+*.test
+*.out
+
+.idea/
+.vscode/
+*.swp
+*.swo
+
+Thumbs.db
+.DS_Store
