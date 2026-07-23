@@ -33,7 +33,7 @@ func addAppsToUrls(urlsPath string, apps []string) error {
 	importUpdated := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if !importUpdated && strings.Contains(line, "from django.urls import") {
+		if !importUpdated && strings.HasPrefix(trimmed, "from django.urls import") {
 			if !strings.Contains(line, "include") {
 				line = strings.Replace(line, "import path", "import path, include", 1)
 			}

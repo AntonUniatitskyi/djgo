@@ -8,10 +8,12 @@ import (
 	"text/template"
 )
 
+//go:embed templates/*
 var templateFiles embed.FS
 
 type ProjectData struct {
-	ProjectName string
+	ProjectName   string
+	PythonVersion string
 }
 
 func GenerateFile(tmplName, outPath string, data ProjectData) error {
@@ -27,13 +29,25 @@ func GenerateFile(tmplName, outPath string, data ProjectData) error {
 	return tmpl.Execute(file, data)
 }
 
-func GenerateInfrastructure(projectPath, projectName string, useDocker bool) error {
-	data := ProjectData{ProjectName: projectName}
-	GenerateFile("gitignore.tmpl", filepath.Join(projectPath, ".gitignore"), data)
+func GenerateInfrastructure(projectPath, projectName string, useDocker bool, pythonVersion string) error {
+	data := ProjectData{
+		ProjectName:   projectName,
+		PythonVersion: pythonVersion + "-slim",
+	}
+	if err := GenerateFile("gitignore.tmpl", filepath.Join(projectPath, ".gitignore"), data); err != nil {
+		return err
+	}
+
 	if useDocker {
-		GenerateFile("docker.tmpl", filepath.Join(projectPath, "Dockerfile"), data)
-		GenerateFile("compose.tmpl", filepath.Join(projectPath, "docker-compose.yml"), data)
-		GenerateFile("dockerignore.tmpl", filepath.Join(projectPath, ".dockerignore"), data)
+		if err := GenerateFile("docker.tmpl", filepath.Join(projectPath, "Dockerfile"), data); err != nil {
+			return err
+		}
+		if err := GenerateFile("compose.tmpl", filepath.Join(projectPath, "docker-compose.yml"), data); err != nil {
+			return err
+		}
+		if err := GenerateFile("dockerignore.tmpl", filepath.Join(projectPath, ".dockerignore"), data); err != nil {
+			return err
+		}
 	}
 
 	return nil

@@ -26,6 +26,15 @@ func getVenvExec(projectName, execName string) string {
 	return absPath
 }
 
+func getPythonVersion(pythonExec string) string {
+	cmd := exec.Command(pythonExec, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+	out, err := cmd.Output()
+	if err != nil {
+		return "3.11"
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func runCommandQuiet(workDir string, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	if workDir != "" {
@@ -47,10 +56,17 @@ func runCommandOutput(workDir string, name string, args ...string) ([]byte, erro
 	return cmd.Output()
 }
 
-func showStep(icon, message string, delayMs int) {
-	fmt.Printf("%s %s...", icon, message)
-	time.Sleep(time.Duration(delayMs) * time.Millisecond)
-	fmt.Println(" ✨")
+func executeStep(icon, message string, action func() error) error {
+	fmt.Printf("%s %s... ", icon, message)
+	start := time.Now()
+	err := action()
+	duration := time.Since(start).Round(time.Millisecond)
+	if err != nil {
+		fmt.Printf("❌ Ошибка (%v)\n", duration)
+		return err
+	}
+	fmt.Printf("✨ (%v)\n", duration)
+	return nil
 }
 
 func launchPyCharmAtTheEnd(projectPath string) {
@@ -91,75 +107,102 @@ func CreateProject(projectName string, apps []string, useDocker bool, useDuplica
 		log.Fatalf("❌ Ошибка создания папки: %v", err)
 	}
 
-	showStep("🐍", "Создаем изолированное окружение (python -m venv env)", 400)
-	if err := runCommandQuiet(projectName, "python", "-m", "venv", "env"); err != nil {
-		log.Fatalf("\n❌ Ошибка создания venv: %v", err)
+	err := executeStep("🐍", "Создаем изолированное окружение", func() error {
+		return runCommandQuiet(projectName, "python", "-m", "venv", "env")
+	})
+	if err != nil {
+		log.Fatalf("\n%v", err)
 	}
 
 	venvPython := getVenvExec(projectName, "python")
 	venvPip := getVenvExec(projectName, "pip")
 
-	showStep("📦", "Устанавливаем Django (и psycopg2-binary для БД) внутрь env", 800)
-	if err := runCommandQuiet("", venvPip, "install", "--no-cache-dir", "django", "psycopg2-binary", "python-decouple"); err != nil {
-		log.Fatalf("\n❌ Ошибка установки пакетов через pip: %v", err)
+	err = executeStep("📦", "Устанавливаем Django, psycopg2 и decouple", func() error {
+		return runCommandQuiet("", venvPip, "install", "--no-cache-dir", "django", "psycopg2-binary", "python-decouple")
+	})
+	if err != nil {
+		log.Fatalf("\n%v", err)
 	}
 
-	showStep("📄", "Генерируем честный requirements.txt через pip freeze", 200)
-	freezeData, err := runCommandOutput("", venvPip, "freeze")
+	err = executeStep("📄", "Генерируем requirements.txt", func() error {
+		freezeData, err := runCommandOutput("", venvPip, "freeze")
+		if err == nil {
+			reqPath := filepath.Join(projectName, "requirements.txt")
+			os.WriteFile(reqPath, freezeData, 0644)
+		}
+		return err
+	})
 	if err != nil {
-		log.Fatalf("\n❌ Ошибка pip freeze: %v", err)
+		log.Fatalf("\n%v", err)
 	}
-	reqPath := filepath.Join(projectName, "requirements.txt")
-	os.WriteFile(reqPath, freezeData, 0644)
+
 	var settingsPath, urlsPath string
 	if useDuplicate {
-		showStep("🏗 ", "Генерируем классическую структуру (duplication)", 300)
-		if err := runCommandQuiet("", venvPython, "-m", "django", "startproject", projectName); err != nil {
-			log.Fatalf("\n❌ Ошибка startproject: %v", err)
-		}
+		err = executeStep("🏗 ", "Генерируем классическую структуру", func() error {
+			return runCommandQuiet("", venvPython, "-m", "django", "startproject", projectName)
+		})
 		settingsPath = filepath.Join(projectName, projectName, "settings.py")
 		urlsPath = filepath.Join(projectName, projectName, "urls.py")
 	} else {
-		showStep("🏗 ", "Создаем плоскую архитектуру (core workspace)", 300)
-		if err := runCommandQuiet(projectName, venvPython, "-m", "django", "startproject", "core", "."); err != nil {
-			log.Fatalf("\n❌ Ошибка startproject: %v", err)
-		}
+		err = executeStep("🏗 ", "Создаем плоскую архитектуру (core)", func() error {
+			return runCommandQuiet(projectName, venvPython, "-m", "django", "startproject", "core", ".")
+		})
 		settingsPath = filepath.Join(projectName, "core", "settings.py")
 		urlsPath = filepath.Join(projectName, "core", "urls.py")
 	}
-	showStep("🔐", "Генерируем криптостойкий SECRET_KEY и настраиваем .env", 300)
-	if err := createEnvFiles(projectName); err != nil {
-		log.Fatalf("\n❌ Ошибка генерации .env файлов: %v", err)
+	if err != nil {
+		log.Fatalf("\n%v", err)
 	}
-	if err := patchSettingsForEnv(settingsPath); err != nil {
-		log.Fatalf("\n❌ Ошибка настройки python-decouple в settings.py: %v", err)
+
+	if err := executeStep("🔐", "Генерируем криптостойкий SECRET_KEY и настраиваем .env", func() error {
+		if err := createEnvFiles(projectName); err != nil {
+			return fmt.Errorf("ошибка генерации .env файлов: %v", err)
+		}
+		if err := patchSettingsForEnv(settingsPath); err != nil {
+			return fmt.Errorf("ошибка настройки python-decouple: %v", err)
+		}
+		return nil
+	}); err != nil {
+		log.Fatalf("\n%v", err)
 	}
-	showStep("🐳", "Разворачиваем .gitignore, .dockerignore и Dockerfile", 300)
-	GenerateInfrastructure(projectName, projectName, useDocker)
+
+	pyVersion := getPythonVersion(venvPython)
+	if err := executeStep("🐳", "Разворачиваем .gitignore, .dockerignore и Dockerfile", func() error {
+		return GenerateInfrastructure(projectName, projectName, useDocker, pyVersion)
+	}); err != nil {
+		log.Fatalf("\n%v", err)
+	}
 
 	if len(apps) > 0 {
 		for _, app := range apps {
-			showStep("🚀", fmt.Sprintf("Создаем аппку [%s] и генерируем urls.py", app), 250)
-			if err := runCommandQuiet(projectName, venvPython, "manage.py", "startapp", app); err != nil {
-				log.Fatalf("\n❌ Ошибка startapp для %s: %v", app, err)
+			if err := executeStep("🚀", fmt.Sprintf("Создаем аппку [%s] и генерируем urls.py", app), func() error {
+				if err := runCommandQuiet(projectName, venvPython, "manage.py", "startapp", app); err != nil {
+					return fmt.Errorf("ошибка startapp для %s: %v", app, err)
+				}
+				return createAppUrls(projectName, app)
+			}); err != nil {
+				log.Fatalf("\n%v", err)
 			}
-			createAppUrls(projectName, app)
 		}
 
-		showStep("⚙️ ", "Интегрируем аппки в settings.py (INSTALLED_APPS)", 200)
-		if err := addAppsToSettings(settingsPath, apps); err != nil {
-			log.Fatalf("\n❌ Ошибка settings.py: %v", err)
+		if err := executeStep("⚙️ ", "Интегрируем аппки в settings.py (INSTALLED_APPS)", func() error {
+			return addAppsToSettings(settingsPath, apps)
+		}); err != nil {
+			log.Fatalf("\n%v", err)
 		}
 
-		showStep("🔗", "Связываем роутинги в главном urls.py", 200)
-		if err := addAppsToUrls(urlsPath, apps); err != nil {
-			log.Fatalf("\n❌ Ошибка urls.py: %v", err)
+		if err := executeStep("🔗", "Связываем роутинги в главном urls.py", func() error {
+			return addAppsToUrls(urlsPath, apps)
+		}); err != nil {
+			log.Fatalf("\n%v", err)
 		}
 	}
 
-	showStep("📚", "Инициализируем Git-репозиторий", 150)
-	runCommandQuiet(projectName, "git", "init")
-
+	if err := executeStep("📚", "Инициализируем Git-репозиторий", func() error {
+		return runCommandQuiet(projectName, "git", "init")
+	}); err != nil {
+		log.Fatalf("\n%v", err)
+	}
 	fmt.Println("\n==================================================")
 	fmt.Printf("🎉 Проект %s успешно собран и готов к разработке!\n", projectName)
 	fmt.Println("==================================================")
